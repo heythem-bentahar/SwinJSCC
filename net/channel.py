@@ -20,50 +20,56 @@ class Channel(nn.Module):
         self.config = config
         self.chan_type = args.channel_type
         self.device = config.device
+        self.gen = None
         self.h = torch.sqrt(torch.randn(1) ** 2
                             + torch.randn(1) ** 2) / 1.414
         if config.logger:
             config.logger.info('【Channel】: Built {} channel, SNR {} dB.'.format(
                 args.channel_type, args.multiple_snr))
 
+    def set_noise_seed(self, seed):
+        """Use a dedicated CUDA generator for all channel noise/fading draws."""
+        self.gen = torch.Generator(device=self.device)
+        self.gen.manual_seed(seed)
+
+    def _randn(self, shape, device, std=1.0):
+        return torch.randn(shape, device=device, generator=self.gen) * std
+
+    def _rand(self, shape, device):
+        return torch.rand(shape, device=device, generator=self.gen)
+
     def gaussian_noise_layer(self, input_layer, std, name=None):
-        device = input_layer.get_device()
-        noise_real = torch.normal(mean=0.0, std=std, size=np.shape(input_layer), device=device)
-        noise_imag = torch.normal(mean=0.0, std=std, size=np.shape(input_layer), device=device)
-        noise = noise_real + 1j * noise_imag
+        device = input_layer.device
+        shape = input_layer.shape
+        noise = self._randn(shape, device, std) + 1j * self._randn(shape, device, std)
         return input_layer + noise
 
     def rayleigh_noise_layer(self, input_layer, std, name=None):
-        noise_real = torch.normal(mean=0.0, std=std, size=np.shape(input_layer))
-        noise_imag = torch.normal(mean=0.0, std=std, size=np.shape(input_layer))
-        noise = noise_real + 1j * noise_imag
-        h = torch.sqrt(torch.normal(mean=0.0, std=1, size=np.shape(input_layer)) ** 2
-                       + torch.normal(mean=0.0, std=1, size=np.shape(input_layer)) ** 2) / np.sqrt(2)
-        if self.config.CUDA:
-            noise = noise.to(input_layer.get_device())
-            h = h.to(input_layer.get_device())
+        device = input_layer.device
+        shape = input_layer.shape
+        noise = self._randn(shape, device, std) + 1j * self._randn(shape, device, std)
+        h = torch.sqrt(self._randn(shape, device) ** 2 + self._randn(shape, device) ** 2) / np.sqrt(2)
         return input_layer * h + noise
 
-
     def rician_noise_layer(self, input_layer, std, name=None):
-        device = input_layer.get_device()
-        shape = np.shape(input_layer)
-        noise = torch.normal(0.0, std, size=shape, device=device) + 1j * torch.normal(0.0, std, size=shape, device=device)
+        device = input_layer.device
+        shape = input_layer.shape
+        noise = self._randn(shape, device, std) + 1j * self._randn(shape, device, std)
         k = RICIAN_K
-        real = np.sqrt(k / (k + 1)) + np.sqrt(1 / (2 * (k + 1))) * torch.randn(shape, device=device)
-        imag = np.sqrt(1 / (2 * (k + 1))) * torch.randn(shape, device=device)
+        real = np.sqrt(k / (k + 1)) + np.sqrt(1 / (2 * (k + 1))) * self._randn(shape, device)
+        imag = np.sqrt(1 / (2 * (k + 1))) * self._randn(shape, device)
         h = torch.sqrt(real ** 2 + imag ** 2)  # E[h^2] = 1
         return input_layer * h + noise
 
     def impulsive_noise_layer(self, input_layer, std, name=None):
         # Bernoulli-Gaussian noise; total noise power equals the Gaussian case, so SNR is comparable
-        device = input_layer.get_device()
-        shape = np.shape(input_layer)
+        device = input_layer.device
+        shape = input_layer.shape
         std_bg = std / np.sqrt(1 + IMPULSE_P * IMPULSE_RATIO)
         std_imp = std_bg * np.sqrt(IMPULSE_RATIO)
-        hit = (torch.rand(shape, device=device) < IMPULSE_P).float()
-        noise_real = torch.normal(0.0, std_bg, size=shape, device=device) + hit * torch.normal(0.0, std_imp, size=shape, device=device)
-        noise_imag = torch.normal(0.0, std_bg, size=shape, device=device) + hit * torch.normal(0.0, std_imp, size=shape, device=device)
+        hit = (self._rand(shape, device) < IMPULSE_P).float()
+        noise_real = self._randn(shape, device, std_bg) + hit * self._randn(shape, device, std_imp)
+        noise_imag = self._randn(shape, device, std_bg) + hit * self._randn(shape, device, std_imp)
         return input_layer + (noise_real + 1j * noise_imag)
 
     def complex_normalize(self, x, power):
