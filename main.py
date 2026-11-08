@@ -13,6 +13,7 @@ from loss.distortion import *
 import time
 import torchvision
 import csv
+import sys
 import math
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -34,7 +35,17 @@ parser.add_argument('--C', type=str, default='96', help='bottleneck dimension')
 parser.add_argument('--multiple-snr', type=str, default='10', help='random or fixed snr')
 parser.add_argument('--model_size', type=str, default='base', choices=['small', 'base', 'large'], help='SwinJSCC model size')
 parser.add_argument('--save-images', action='store_true', help='save HR originals, reconstructions, comparisons and scores')
+parser.add_argument('--run-name', type=str, default=None, help='output dir name under history/ (required with --training on CIFAR10)')
+parser.add_argument('--epochs', type=int, default=20, help='training epochs')
+parser.add_argument('--init-seed', type=int, default=0, help='seed for model initialization')
+parser.add_argument('--sampler-seed', type=int, default=0, help='seed for (channel, SNR) sampling')
+parser.add_argument('--noise-seed', type=int, default=0, help='seed for channel noise')
+parser.add_argument('--order-seed', type=int, default=0, help='seed for training data order and flips')
+parser.add_argument('--train-subset', type=int, default=None, help='use only the first N training images (smoke tests)')
+parser.add_argument('--val-subset', type=int, default=None, help='use only the first N validation images (smoke tests)')
 args = parser.parse_args()
+if args.training and args.trainset == 'CIFAR10' and not args.run_name:
+    parser.error('--run-name is required when training on CIFAR10')
 
 
 class config():
@@ -50,7 +61,7 @@ class config():
     print_step = 100
     plot_step = 10000
     filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    workdir = './history/{}'.format(filename)
+    workdir = './history/{}'.format(args.run_name if args.run_name else filename)
     log = workdir + '/Log_{}.log'.format(filename)
     samples = workdir + '/samples'
     models = workdir + '/models'
@@ -59,7 +70,7 @@ class config():
     # training details
     normalize = False
     learning_rate = 0.0001
-    tot_epoch = 20
+    tot_epoch = args.epochs
 
     if args.trainset == 'CIFAR10':
         save_model_freq = 1
@@ -423,7 +434,88 @@ def test():
     print("Finish Test!")
 
 
+def evaluate_val(net, val_loader, channel, snr, noise_seed=12345):
+    """Mean MSE-based PSNR on the validation loader for one (channel, SNR).
+    Uses a dedicated noise generator and restores the training one afterwards."""
+    saved_gen = net.channel.gen
+    net.channel.set_noise_seed(noise_seed)
+    total_mse, total_n = 0.0, 0
+    try:
+        with torch.no_grad():
+            for images, _ in val_loader:
+                images = images.cuda()
+                _, _, _, mse, _ = net(images, snr, int(args.C), channel)
+                total_mse += mse.item() * images.shape[0]
+                total_n += images.shape[0]
+    finally:
+        net.channel.gen = saved_gen
+    return 10 * math.log10(255. ** 2 / (total_mse / total_n))
+
+
+def validate(net, val_loader):
+    net.eval()
+    per_channel = {}
+    for chan in net.chan_types:
+        per_channel[chan] = float(np.mean([evaluate_val(net, val_loader, chan, snr)
+                                           for snr in [1, 4, 7, 10, 13]]))
+    net.train()
+    return float(np.mean(list(per_channel.values()))), per_channel
+
+
+def run_cifar_training():
+    from net.sampling import ConditionSampler
+    from data.datasets import get_cifar_loaders
+    os.makedirs(config.models, exist_ok=True)
+    logger = logger_configuration(config, save_log=True)
+    logger.info(config.__dict__)
+    seed_torch()
+    snrs = [int(x) for x in args.multiple_snr.split(',')]
+    sampler = ConditionSampler(args.sampler_seed, snrs, ['awgn', 'rayleigh', 'rician', 'impulsive'])
+    torch.manual_seed(args.init_seed)
+    torch.cuda.manual_seed_all(args.init_seed)
+    net = SwinJSCC(args, config, sampler=sampler)
+    seed_torch()  # identical global state after construction for every run
+    net.channel.set_noise_seed(args.noise_seed)
+    net = net.cuda()
+    train_loader, val_loader, _ = get_cifar_loaders(
+        config.train_data_dir, config.batch_size, order_seed=args.order_seed,
+        train_subset=args.train_subset, val_subset=args.val_subset)
+    optimizer = optim.Adam(net.parameters(), lr=config.learning_rate)
+    workdir = Path(config.workdir)
+    with open(workdir / 'val_log.csv', 'w', newline='') as f:
+        csv.writer(f).writerow(['epoch', 'mean_psnr'] + ['psnr_' + c for c in net.chan_types])
+    best, step = -1.0, 0
+    for epoch in range(args.epochs):
+        net.train()
+        for images, _ in train_loader:
+            step += 1
+            images = images.cuda()
+            _, cbr, snr, mse, loss = net(images, None, int(args.C))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            if step % config.print_step == 0:
+                logger.info('Epoch {} | step {} | loss {:.4f} | CBR {:.4f} | SNR {}'.format(
+                    epoch + 1, step, loss.item(), cbr, snr))
+        mean_psnr, per_channel = validate(net, val_loader)
+        with open(workdir / 'val_log.csv', 'a', newline='') as f:
+            csv.writer(f).writerow([epoch + 1, mean_psnr] + [per_channel[c] for c in net.chan_types])
+        with open(workdir / 'sampler_log.csv', 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['step', 'channel', 'snr'])
+            w.writerows([(i + 1, c, s) for i, (c, s) in enumerate(sampler.log)])
+        save_model(net, config.models + '/last.model')
+        if mean_psnr > best:
+            best = mean_psnr
+            save_model(net, config.models + '/best.model')
+        logger.info('Epoch {} | val PSNR {:.3f} (best {:.3f})'.format(epoch + 1, mean_psnr, best))
+    print('Finish Training! best val PSNR {:.3f}'.format(best))
+
+
 if __name__ == '__main__':
+    if args.training and args.trainset == 'CIFAR10':
+        run_cifar_training()
+        sys.exit(0)
     if args.training:
         os.makedirs(config.models, exist_ok=True)
     seed_torch()

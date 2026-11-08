@@ -186,7 +186,8 @@ class SeededHorizontalFlip:
         return transforms.functional.hflip(img) if self.rng.random() < self.p else img
 
 
-def get_cifar_loaders(root, batch_size, val_size=5000, split_seed=0, order_seed=0):
+def get_cifar_loaders(root, batch_size, val_size=5000, split_seed=0, order_seed=0,
+                      train_subset=None, val_subset=None):
     """Return (train, val, test) CIFAR10 loaders.
 
     val is a fixed held-out part of the official training set (no flip augmentation);
@@ -198,6 +199,10 @@ def get_cifar_loaders(root, batch_size, val_size=5000, split_seed=0, order_seed=
     test_set = datasets.CIFAR10(root=root, train=False, transform=eval_tf, download=False)
     perm = torch.randperm(len(train_full), generator=torch.Generator().manual_seed(split_seed)).tolist()
     val_idx, train_idx = sorted(perm[:val_size]), sorted(perm[val_size:])
+    if train_subset:
+        train_idx = train_idx[:train_subset]
+    if val_subset:
+        val_idx = val_idx[:val_subset]
     order_gen = torch.Generator().manual_seed(order_seed)
     train_loader = data.DataLoader(data.Subset(train_full, train_idx), batch_size=batch_size,
                                    shuffle=True, drop_last=True, generator=order_gen,
