@@ -172,3 +172,36 @@ def get_loader(args, config):
 
     return train_loader, test_loader
 
+
+
+class SeededHorizontalFlip:
+    """Horizontal flip with its own RNG, so augmentation does not depend on global RNG state."""
+
+    def __init__(self, seed, p=0.5):
+        import random
+        self.rng = random.Random(seed)
+        self.p = p
+
+    def __call__(self, img):
+        return transforms.functional.hflip(img) if self.rng.random() < self.p else img
+
+
+def get_cifar_loaders(root, batch_size, val_size=5000, split_seed=0, order_seed=0):
+    """Return (train, val, test) CIFAR10 loaders.
+
+    val is a fixed held-out part of the official training set (no flip augmentation);
+    test is the official 10,000-image test set. Train order is driven by its own generator."""
+    train_tf = transforms.Compose([SeededHorizontalFlip(order_seed), transforms.ToTensor()])
+    eval_tf = transforms.Compose([transforms.ToTensor()])
+    train_full = datasets.CIFAR10(root=root, train=True, transform=train_tf, download=False)
+    val_full = datasets.CIFAR10(root=root, train=True, transform=eval_tf, download=False)
+    test_set = datasets.CIFAR10(root=root, train=False, transform=eval_tf, download=False)
+    perm = torch.randperm(len(train_full), generator=torch.Generator().manual_seed(split_seed)).tolist()
+    val_idx, train_idx = sorted(perm[:val_size]), sorted(perm[val_size:])
+    order_gen = torch.Generator().manual_seed(order_seed)
+    train_loader = data.DataLoader(data.Subset(train_full, train_idx), batch_size=batch_size,
+                                   shuffle=True, drop_last=True, generator=order_gen,
+                                   num_workers=NUM_DATASET_WORKERS)
+    val_loader = data.DataLoader(data.Subset(val_full, val_idx), batch_size=1024, shuffle=False)
+    test_loader = data.DataLoader(test_set, batch_size=1024, shuffle=False)
+    return train_loader, val_loader, test_loader
