@@ -5,5 +5,10 @@ CIFAR10/
 history/
 results/
 plots_ab/
+plots/
+SwinJSCC_handoff.md
+AGENTS.md
+CLAUDE.md
+SwinJSCC_results
 *.model
 .superpowers/
