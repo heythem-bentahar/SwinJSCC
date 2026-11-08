@@ -2,12 +2,13 @@ from net.decoder import *
 from net.encoder import *
 from loss.distortion import Distortion
 from net.channel import Channel
+from net.sampling import ConditionSampler
 from random import choice
 import torch.nn as nn
 
 
 class SwinJSCC(nn.Module):
-    def __init__(self, args, config):
+    def __init__(self, args, config, sampler=None):
         super(SwinJSCC, self).__init__()
         self.config = config
         self.chan_types = ['awgn', 'rayleigh', 'rician', 'impulsive']
@@ -35,6 +36,8 @@ class SwinJSCC(nn.Module):
         self.channel_number = args.C.split(",")
         for i in range(len(self.channel_number)):
             self.channel_number[i] = int(self.channel_number[i])
+        self.sampler = sampler if sampler is not None else ConditionSampler(
+            0, self.multiple_snr, self.chan_types)
         self.downsample = config.downsample
         self.model = args.model
 
@@ -55,14 +58,14 @@ class SwinJSCC(nn.Module):
             self.H = H
             self.W = W
 
+        sampled_chan = None
         if given_SNR is None:
-            SNR = choice(self.multiple_snr)
-            chan_param = SNR
+            sampled_chan, chan_param = self.sampler.next()
         else:
             chan_param = given_SNR
 
-        if self.mixed:
-            self.channel.chan_type = choice(self.chan_types)
+        if self.mixed and sampled_chan is not None:
+            self.channel.chan_type = sampled_chan
         cond = chan_param
         if self.type_aware:
             onehot = [float(self.channel.chan_type == t) for t in self.chan_types]
