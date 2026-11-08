@@ -41,6 +41,7 @@ parser.add_argument('--init-seed', type=int, default=0, help='seed for model ini
 parser.add_argument('--sampler-seed', type=int, default=0, help='seed for (channel, SNR) sampling')
 parser.add_argument('--noise-seed', type=int, default=0, help='seed for channel noise')
 parser.add_argument('--order-seed', type=int, default=0, help='seed for training data order and flips')
+parser.add_argument('--resume', action='store_true', help='continue a CIFAR10 training run from history/<run-name>/resume.pt')
 parser.add_argument('--train-subset', type=int, default=None, help='use only the first N training images (smoke tests)')
 parser.add_argument('--val-subset', type=int, default=None, help='use only the first N validation images (smoke tests)')
 args = parser.parse_args()
@@ -464,7 +465,8 @@ def validate(net, val_loader):
 
 def run_cifar_training():
     from net.sampling import ConditionSampler
-    from data.datasets import get_cifar_loaders
+    from data.datasets import get_cifar_loaders, get_loader_state, set_loader_state
+    import random
     os.makedirs(config.models, exist_ok=True)
     logger = logger_configuration(config, save_log=True)
     logger.info(config.__dict__)
@@ -482,10 +484,27 @@ def run_cifar_training():
         train_subset=args.train_subset, val_subset=args.val_subset)
     optimizer = optim.Adam(net.parameters(), lr=config.learning_rate)
     workdir = Path(config.workdir)
-    with open(workdir / 'val_log.csv', 'w', newline='') as f:
-        csv.writer(f).writerow(['epoch', 'mean_psnr'] + ['psnr_' + c for c in net.chan_types])
-    best, step = -1.0, 0
-    for epoch in range(args.epochs):
+    resume_path = workdir / 'resume.pt'
+    best, step, start_epoch = -1.0, 0, 0
+    if args.resume:
+        if not resume_path.exists():
+            raise SystemExit('--resume: no checkpoint found at {}'.format(resume_path))
+        ck = torch.load(resume_path, weights_only=False)
+        net.load_state_dict(ck['model'])
+        optimizer.load_state_dict(ck['optimizer'])
+        start_epoch, step, best = ck['epoch'], ck['step'], ck['best']
+        sampler.rng.setstate(ck['sampler_rng'])
+        sampler.log = ck['sampler_log']
+        net.channel.gen.set_state(ck['noise_gen'])
+        set_loader_state(train_loader, ck['loader'])
+        torch.set_rng_state(ck['torch_rng'])
+        torch.cuda.set_rng_state(ck['cuda_rng'])
+        random.setstate(ck['py_rng'])
+        logger.info('Resumed from epoch {} (step {}, best val PSNR {:.3f})'.format(start_epoch, step, best))
+    else:
+        with open(workdir / 'val_log.csv', 'w', newline='') as f:
+            csv.writer(f).writerow(['epoch', 'mean_psnr'] + ['psnr_' + c for c in net.chan_types])
+    for epoch in range(start_epoch, args.epochs):
         net.train()
         for images, _ in train_loader:
             step += 1
@@ -509,6 +528,13 @@ def run_cifar_training():
             best = mean_psnr
             save_model(net, config.models + '/best.model')
         logger.info('Epoch {} | val PSNR {:.3f} (best {:.3f})'.format(epoch + 1, mean_psnr, best))
+        torch.save({'model': net.state_dict(), 'optimizer': optimizer.state_dict(), 'epoch': epoch + 1,
+                    'step': step, 'best': best, 'sampler_rng': sampler.rng.getstate(),
+                    'sampler_log': sampler.log, 'noise_gen': net.channel.gen.get_state(),
+                    'loader': get_loader_state(train_loader), 'torch_rng': torch.get_rng_state(),
+                    'cuda_rng': torch.cuda.get_rng_state(), 'py_rng': random.getstate()},
+                   str(resume_path) + '.tmp')
+        os.replace(str(resume_path) + '.tmp', resume_path)
     print('Finish Training! best val PSNR {:.3f}'.format(best))
 
 

@@ -210,3 +210,17 @@ def get_cifar_loaders(root, batch_size, val_size=5000, split_seed=0, order_seed=
     val_loader = data.DataLoader(data.Subset(val_full, val_idx), batch_size=1024, shuffle=False)
     test_loader = data.DataLoader(test_set, batch_size=1024, shuffle=False)
     return train_loader, val_loader, test_loader
+
+
+def _flip_transform(loader):
+    return loader.dataset.dataset.transform.transforms[0]
+
+
+def get_loader_state(loader):
+    """RNG state that determines the next epoch's order and flips of a get_cifar_loaders train loader."""
+    return {'order': loader.generator.get_state(), 'flip': _flip_transform(loader).rng.getstate()}
+
+
+def set_loader_state(loader, state):
+    loader.generator.set_state(state['order'])
+    _flip_transform(loader).rng.setstate(state['flip'])
