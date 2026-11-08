@@ -49,7 +49,20 @@ class SwinJSCC(nn.Module):
         noisy_feature = self.channel.forward(feature, chan_param, avg_pwr)
         return noisy_feature
 
-    def forward(self, input_image, given_SNR=None, given_rate=None):
+    def forward(self, input_image, given_SNR=None, given_rate=None, given_chan=None, label_chan=None):
+        """given_chan: channel actually applied (eval override). label_chan: channel
+        label fed to encoder/decoder when type_aware (defaults to the applied channel)."""
+        for name in (given_chan, label_chan):
+            if name is not None and name not in self.chan_types:
+                raise ValueError("Unknown channel name {!r}; expected one of {}".format(name, self.chan_types))
+        previous_chan = self.channel.chan_type
+        try:
+            return self._forward(input_image, given_SNR, given_rate, given_chan, label_chan)
+        finally:
+            if given_chan is not None:
+                self.channel.chan_type = previous_chan
+
+    def _forward(self, input_image, given_SNR, given_rate, given_chan, label_chan):
         B, _, H, W = input_image.shape
 
         if H != self.H or W != self.W:
@@ -64,11 +77,16 @@ class SwinJSCC(nn.Module):
         else:
             chan_param = given_SNR
 
-        if self.mixed and sampled_chan is not None:
+        if given_chan is not None:
+            self.channel.chan_type = given_chan
+        elif self.mixed and sampled_chan is not None:
             self.channel.chan_type = sampled_chan
         cond = chan_param
         if self.type_aware:
-            onehot = [float(self.channel.chan_type == t) for t in self.chan_types]
+            label = label_chan if label_chan is not None else self.channel.chan_type
+            if label not in self.chan_types:
+                raise ValueError("Cannot build a channel label from {!r}".format(label))
+            onehot = [float(label == t) for t in self.chan_types]
             cond = [chan_param] + onehot
 
         if given_rate is None:
