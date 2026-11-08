@@ -52,3 +52,28 @@ def test_eval_deterministic_with_noise_seed():
 def test_empty_kodak_dir_raises(tmp_path):
     with pytest.raises(ValueError):
         ev.KodakFolder(str(tmp_path))
+
+
+def test_label_sweep_has_16_pairs_per_snr():
+    net = make_net(type_aware=True).eval()
+    rows = ev.label_sweep(net, tiny_loader())
+    assert len(rows) == 16 * 5
+    for snr in ev.PAPER_SNRS:
+        pairs = {(r['actual_channel'], r['label_channel']) for r in rows if r['SNR_dB'] == snr}
+        assert pairs == {(a, l) for a in TYPES for l in TYPES}
+
+
+def test_diagonal_equals_normal_eval():
+    net = make_net(type_aware=True).eval()
+    rows = ev.label_sweep(net, tiny_loader())
+    for r in rows:
+        if r['actual_channel'] == r['label_channel'] and r['SNR_dB'] == 7:
+            psnr, msssim = ev.evaluate(net, tiny_loader(), r['actual_channel'], 7)
+            assert abs(r['PSNR_dB'] - psnr) < 1e-6
+            assert abs(r['MS_SSIM'] - msssim) < 1e-6
+
+
+def test_label_sweep_refused_for_model_a():
+    net = make_net(type_aware=False).eval()
+    with pytest.raises(ValueError, match='type-aware'):
+        ev.label_sweep(net, tiny_loader())

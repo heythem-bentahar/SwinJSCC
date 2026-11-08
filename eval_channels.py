@@ -135,7 +135,18 @@ def main():
 
 
 def label_sweep(net, loader):
-    raise NotImplementedError
+    """PSNR/MS-SSIM for every (actual channel, supplied label) pair at the paper SNRs.
+    The applied channel stays `actual`; only the label fed to the network changes."""
+    if not net.type_aware:
+        raise ValueError('label sweep needs a type-aware model (Model B)')
+    rows = []
+    for actual in CHAN_TYPES:
+        for label in CHAN_TYPES:
+            for snr in PAPER_SNRS:
+                psnr, msssim = evaluate(net, loader, actual, snr, label)
+                rows.append(dict(actual_channel=actual, label_channel=label, SNR_dB=snr,
+                                 PSNR_dB=psnr, MS_SSIM=msssim))
+    return rows
 
 
 if __name__ == '__main__':
