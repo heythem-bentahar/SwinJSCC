@@ -9,6 +9,7 @@ plots/
 SwinJSCC_handoff.md
 AGENTS.md
 CLAUDE.md
-SwinJSCC_results
+Kodak/
 *.model
 .superpowers/
+docs/
