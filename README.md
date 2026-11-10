@@ -44,7 +44,7 @@ python main.py --training --trainset CIFAR10 --model SwinJSCC_w/_SA --channel-ty
 python main.py --training --trainset CIFAR10 --model SwinJSCC_w/o_SAandRA --channel-type mixed --C 32 --multiple-snr 1,4,7,10,13 --run-name no_info --epochs 60
 ```
 
-All reported runs were trained for 22 epochs (the original plan was 60). Seed-0 model B was first stopped at epoch 20 and then resumed to 22; its best checkpoint stayed at epoch 20.
+All reported runs were trained for 22 epochs (the original plan was 60).
 
 ### Extra seeds
 `run_seeds.py` trains, evaluates and summarizes A, B and C for additional seeds (default 1 and 2), using the same value for all four seed flags. It skips finished runs, resumes interrupted ones, and refuses seed 0 so the existing runs are not overwritten.
