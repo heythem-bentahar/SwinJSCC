@@ -13,3 +13,4 @@ Kodak/
 *.model
 .superpowers/
 docs/
+remove_claude_coauthor.sh

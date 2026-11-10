@@ -1,6 +1,6 @@
-"""Plot Model A (SNR-aware) vs Model B (SNR + channel-type-aware).
+"""Plot Model A (SNR-aware) vs Model B (SNR + channel-type-aware), optionally with Model C (no side information).
 
-Usage: python plot_ab.py --a results/A.csv --b results/B.csv [--labels results/B_labels.csv] --out plots_ab/
+Usage: python plot_ab.py --a results/A.csv --b results/B.csv [--c results/C.csv] [--labels results/B_labels.csv] --out plots_ab/
 """
 import argparse
 import csv
@@ -13,12 +13,13 @@ import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
 # Validated categorical slots 1 and 2 (blue, orange) from the reference palette.
-COLOR_A, COLOR_B = '#2a78d6', '#eb6834'
+COLOR_A, COLOR_B, COLOR_C = '#2a78d6', '#eb6834', '#4f8a3c'
 INK, INK_MUTED, GRID, SURFACE = '#0b0b0b', '#52514e', '#e3e2dd', '#fcfcfb'
 CHANNELS = ['awgn', 'rayleigh', 'rician', 'impulsive']
 TITLES = {'awgn': 'AWGN', 'rayleigh': 'Rayleigh', 'rician': 'Rician (K=5)', 'impulsive': 'Impulsive'}
 LABEL_A = 'SNR-aware (A)'
 LABEL_B = 'SNR + channel-type-aware (B)'
+LABEL_C = 'No side information (C)'
 METRICS = {'PSNR_dB': ('psnr', 'PSNR (dB)'), 'MS_SSIM': ('msssim', 'MS-SSIM')}
 
 
@@ -65,19 +66,21 @@ def draw_line(ax, pts, color, marker, label):
             markersize=6, markerfacecolor=SURFACE, markeredgecolor=color, markeredgewidth=1.5)
 
 
-def plot_metric(rows_a, rows_b, dataset, metric, out_dir):
+def plot_metric(rows_a, rows_b, dataset, metric, out_dir, rows_c=None):
     prefix, ylabel = METRICS[metric]
     fig, axes = plt.subplots(2, 2, figsize=(9, 6.5), sharex=True, facecolor=SURFACE)
     for ax, chan in zip(axes.flat, CHANNELS):
         style_axes(ax)
         draw_line(ax, series(rows_a, dataset, chan, metric), COLOR_A, 'o', LABEL_A)
         draw_line(ax, series(rows_b, dataset, chan, metric), COLOR_B, 's', LABEL_B)
+        if rows_c:
+            draw_line(ax, series(rows_c, dataset, chan, metric), COLOR_C, '^', LABEL_C)
         ax.set_title(TITLES[chan], color=INK, fontsize=11, loc='left')
         ax.set_ylabel(ylabel, color=INK_MUTED, fontsize=9)
     for ax in axes[1]:
         ax.set_xlabel('SNR (dB)', color=INK_MUTED, fontsize=9)
     handles, labels = axes.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', ncol=2, frameon=False, fontsize=9,
+    fig.legend(handles, labels, loc='upper center', ncol=3 if rows_c else 2, frameon=False, fontsize=9,
                labelcolor=INK)
     fig.text(0.5, 0.005, 'Hollow markers: SNRs outside the paper training range (beyond paper). '
              'Single training run per model.', ha='center', fontsize=8, color=INK_MUTED)
@@ -118,15 +121,17 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--a', required=True)
     p.add_argument('--b', required=True)
+    p.add_argument('--c', default=None, help='optional Model C (no side information) results CSV')
     p.add_argument('--labels', default=None)
     p.add_argument('--out', required=True)
     a = p.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rows_a, rows_b = load(a.a), load(a.b)
+    rows_c = load(a.c) if a.c else None
     for dataset in sorted({r['dataset'] for r in rows_a} & {r['dataset'] for r in rows_b}):
         for metric in METRICS:
-            plot_metric(rows_a, rows_b, dataset, metric, out)
+            plot_metric(rows_a, rows_b, dataset, metric, out, rows_c)
     if a.labels:
         plot_confusion(load(a.labels), out)
     print('wrote figures to', out)

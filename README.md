@@ -19,6 +19,17 @@ This fork evaluates the authors' pretrained checkpoints and extends the channel 
 ### Channel-type-aware ModNet
 `--type-aware` feeds the Channel ModNet `[SNR, one-hot(channel type)]` instead of SNR alone. This changes the ModNet layer shapes, so the authors' pretrained checkpoints only load without this flag.
 
+### Three-model comparison (A, B, C)
+The CIFAR10 experiments compare three models trained under identical conditions (`--channel-type mixed`, `--C 32`, same seeds):
+
+| Model | `--model` | Extra flag | Told about |
+|---|---|---|---|
+| A (`snr_aware`) | `SwinJSCC_w/_SA` | none | SNR |
+| B (`snr_type_aware`) | `SwinJSCC_w/_SA` | `--type-aware` | SNR and channel type |
+| C (`no_info`) | `SwinJSCC_w/o_SAandRA` | none | nothing (channel still adds noise at the sampled SNR) |
+
+A and B differ only in the ModNet input size (1 vs 5). C has no ModNet layers at all, so a gap between C and A mixes the missing SNR information with the missing ModNet capacity.
+
 ### CIFAR10 training
 With `--training --trainset CIFAR10`, the script runs a seeded training loop with validation:
 * 45,000 / 5,000 / 10,000 train / validation / test split with a fixed split seed.
@@ -30,7 +41,18 @@ With `--training --trainset CIFAR10`, the script runs a seeded training loop wit
 ```
 python main.py --training --trainset CIFAR10 --model SwinJSCC_w/_SA --channel-type mixed --C 32 --multiple-snr 1,4,7,10,13 --run-name snr_aware --epochs 60
 python main.py --training --trainset CIFAR10 --model SwinJSCC_w/_SA --channel-type mixed --C 32 --multiple-snr 1,4,7,10,13 --type-aware --run-name snr_type_aware --epochs 60
+python main.py --training --trainset CIFAR10 --model SwinJSCC_w/o_SAandRA --channel-type mixed --C 32 --multiple-snr 1,4,7,10,13 --run-name no_info --epochs 60
 ```
+
+The runs reported so far were stopped early (A after epoch 22, B after 20, C at 22) and use a single seed (0).
+
+### Extra seeds
+`run_seeds.py` trains, evaluates and summarizes A, B and C for additional seeds (default 1 and 2), using the same value for all four seed flags. It skips finished runs, resumes interrupted ones, and refuses seed 0 so the existing runs are not overwritten.
+```
+python run_seeds.py
+python run_seeds.py --seeds 1 --epochs 22
+```
+Runs are named `snr_aware_s1`, `snr_type_aware_s1`, `no_info_s1` and so on. At the end it runs `aggregate_seeds.py`, which can also be run alone. It prints each model's PSNR (averaged over SNR 1 to 13 dB) as mean ± standard deviation across seeds, plus the B−A, A−C and B−C differences with the number of seeds in which the first model is ahead, and writes `results/seed_summary.csv`.
 
 ### Resuming training
 Each epoch writes `history/NAME/resume.pt` (model, optimizer, all random-number states and data-loader state). To continue an interrupted run, repeat the same command with the same `--run-name` and add `--resume`:
@@ -42,15 +64,17 @@ python main.py --training --trainset CIFAR10 --model SwinJSCC_w/_SA --channel-ty
 `--epochs` is the final epoch count, not the number of extra epochs. A resumed run matches an uninterrupted one exactly (same logs, identical weights), which `tests/test_resume.py` checks. Runs started before resume support existed have no `resume.pt` and cannot be resumed.
 
 ### Evaluation and plots
-* `eval_channels.py` evaluates a checkpoint per channel and SNR on the CIFAR10 test set and optionally Kodak, and writes a CSV. `--label-sweep` also tests every (true channel, wrong label) pair for a type-aware model.
+* `eval_channels.py` evaluates a checkpoint per channel and SNR on the CIFAR10 test set and optionally Kodak, and writes a CSV. `--label-sweep` also tests every (true channel, wrong label) pair for a type-aware model. `--model` selects the architecture (default `SwinJSCC_w/_SA`; use `SwinJSCC_w/o_SAandRA` for model C).
 ```
 python eval_channels.py --checkpoint history/snr_type_aware/models/best.model --run-name snr_type_aware --type-aware 1 --out results/snr_type_aware.csv --kodak-dir PATH_TO_KODAK --label-sweep
+python eval_channels.py --checkpoint history/no_info/models/best.model --run-name no_info --type-aware 0 --model SwinJSCC_w/o_SAandRA --out results/no_info.csv --kodak-dir PATH_TO_KODAK
 ```
-* `plot_ab.py` plots two models' curves against each other and the label-confusion heatmap.
+* `plot_ab.py` plots two or three models' curves against each other and the label-confusion heatmap.
 ```
-python plot_ab.py --a results/snr_aware.csv --b results/snr_type_aware.csv --labels results/snr_type_aware_labels.csv --out plots
+python plot_ab.py --a results/snr_aware.csv --b results/snr_type_aware.csv --c results/no_info.csv --labels results/snr_type_aware_labels.csv --out plots
 ```
-`--labels` is optional and takes the CSV written by `--label-sweep`.
+`--c` (model C) and `--labels` (the CSV written by `--label-sweep`) are optional.
+* `aggregate_seeds.py` summarizes results across seeds (see Extra seeds above).
 * `plot_swinjscc.py` plots the pretrained-checkpoint sweeps from `SwinJSCC_results.csv`.
 * `--save-images` saves originals, reconstructions, side-by-side images and per-image metrics when evaluating.
 * `--model-path path/to/x.model` selects a checkpoint without editing code.
