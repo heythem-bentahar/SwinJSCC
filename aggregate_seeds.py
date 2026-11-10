@@ -54,6 +54,7 @@ def main():
     p.add_argument('--results', default='results')
     p.add_argument('--snr-min', type=float, default=1.0)
     p.add_argument('--snr-max', type=float, default=13.0)
+    p.add_argument('--per-seed', action='store_true', help='also print each seed\'s paired difference')
     a = p.parse_args()
 
     runs = load_runs(a.results)
@@ -66,7 +67,9 @@ def main():
         a.snr_min, a.snr_max))
 
     out_rows = []
-    header = '{:8s} {:10s} {:>15s} {:>15s} {:>15s}   {:>16s} {:>16s} {:>16s}'.format(
+    print('Differences are PAIRED: computed per seed, then mean +/- sample std of those per-seed differences.')
+    print('(Seeds share sampler/noise/order seeds, so each seed is a matched pair.)\n')
+    header = '{:8s} {:10s} {:>15s} {:>15s} {:>15s}   {:>22s} {:>22s} {:>22s}'.format(
         'dataset', 'channel', 'A', 'B', 'C', 'B-A (wins)', 'A-C (wins)', 'B-C (wins)')
     print(header)
     for dataset in ('cifar10', 'kodak'):
@@ -81,18 +84,26 @@ def main():
 
             def d(k):
                 x = diffs[k]
-                return '{:+.2f} ({}/{})'.format(x.mean(), int((x > 0).sum()), len(x))
-            print('{:8s} {:10s} {:>15s} {:>15s} {:>15s}   {:>16s} {:>16s} {:>16s}'.format(
+                sd = x.std(ddof=1) if len(x) > 1 else float('nan')
+                return '{:+.2f} +/- {:.2f} ({}/{})'.format(x.mean(), sd, int((x > 0).sum()), len(x))
+            print('{:8s} {:10s} {:>15s} {:>15s} {:>15s}   {:>22s} {:>22s} {:>22s}'.format(
                 dataset, channel, fmt(per['A']), fmt(per['B']), fmt(per['C']),
                 d('B-A'), d('A-C'), d('B-C')))
+            if a.per_seed:
+                for k in ('B-A', 'A-C', 'B-C'):
+                    print('           per-seed {} (seeds {}): {}'.format(
+                        k, common, ' '.join('{:+.2f}'.format(v) for v in diffs[k])))
             out_rows.append(dict(
                 dataset=dataset, channel=channel, n_seeds=len(common),
                 A_mean=np.mean(per['A']), A_std=np.std(per['A'], ddof=1) if len(common) > 1 else '',
                 B_mean=np.mean(per['B']), B_std=np.std(per['B'], ddof=1) if len(common) > 1 else '',
                 C_mean=np.mean(per['C']), C_std=np.std(per['C'], ddof=1) if len(common) > 1 else '',
-                BminusA=diffs['B-A'].mean(), BminusA_wins=int((diffs['B-A'] > 0).sum()),
-                AminusC=diffs['A-C'].mean(), AminusC_wins=int((diffs['A-C'] > 0).sum()),
-                BminusC=diffs['B-C'].mean(), BminusC_wins=int((diffs['B-C'] > 0).sum())))
+                BminusA=diffs['B-A'].mean(), BminusA_std=diffs['B-A'].std(ddof=1) if len(common) > 1 else '',
+                BminusA_wins=int((diffs['B-A'] > 0).sum()),
+                AminusC=diffs['A-C'].mean(), AminusC_std=diffs['A-C'].std(ddof=1) if len(common) > 1 else '',
+                AminusC_wins=int((diffs['A-C'] > 0).sum()),
+                BminusC=diffs['B-C'].mean(), BminusC_std=diffs['B-C'].std(ddof=1) if len(common) > 1 else '',
+                BminusC_wins=int((diffs['B-C'] > 0).sum())))
 
     if out_rows:
         path = Path(a.results) / 'seed_summary.csv'
@@ -101,8 +112,8 @@ def main():
             w.writeheader()
             w.writerows(out_rows)
         print('\nwrote', path)
-    print('"(k/n)" = number of seeds in which the first model is ahead. A gap is only credible if it has '
-          'the same sign in every seed and is larger than the spread.')
+    print('"(k/n)" = number of seeds in which the first model is ahead. The +/- is the spread of the paired '
+          'per-seed differences (n is small, so it is a rough guide, not a significance test).')
 
 
 if __name__ == '__main__':
